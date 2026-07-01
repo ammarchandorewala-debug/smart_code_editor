@@ -11,6 +11,7 @@ function RunCodePage() {
 
   const [output, setOutput] = useState("Running...");
   const [errorData, setErrorData] = useState(null);
+  const [runMode, setRunMode] = useState("Executing...");
 
   useEffect(() => {
     runCode();
@@ -19,49 +20,113 @@ function RunCodePage() {
 
   const runCode = async () => {
     try {
-      const response = await fetch(
-        "https://ce.judge0.com/submissions?wait=true",
-        {
+      // 1. Attempt backend execution via our new Express server
+      const response = await fetch("http://localhost:5000/api/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ code, input }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Server execution failed");
+      }
+
+      const data = await response.json();
+      setOutput(data.output);
+      setRunMode("Server Mode (Node.js & MongoDB)");
+
+      if (data.success) {
+        setErrorData(null);
+      } else {
+        setErrorData(explainError(data.output));
+      }
+
+      // Save execution run to MongoDB History
+      try {
+        await fetch("http://localhost:5000/api/history", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            language_id: 63, // 
-            source_code: code,
-            stdin: input,
+            code,
+            language: "javascript",
+            output: data.output,
+            success: data.success,
           }),
-        }
-      );
-
-      const data = await response.json();
-
-      console.log("Judge0 Response:", data); // DEBUG
-
-      // ✅ Handle errors
-      if (data.stderr) {
-        setOutput(data.stderr);
-        setErrorData(explainError(data.stderr));
+        });
+      } catch (dbErr) {
+        console.warn("Could not log execution history to MongoDB:", dbErr.message);
       }
-      else if (data.compile_output) {
-        setOutput(data.compile_output);
-        setErrorData(explainError(data.compile_output));
-      }
-      else {
-        setOutput(data.stdout || "No Output");
+
+    } catch (err) {
+      // 2. Offline Fallback: If backend server is down, run in-browser safely
+      console.warn("Backend server offline. Falling back to local browser runner.", err.message);
+      setRunMode("Offline Mode (In-Browser Runner)");
+
+      const logs = [];
+      const originalLog = console.log;
+      const originalError = console.error;
+      const originalWarn = console.warn;
+      const originalPrompt = window.prompt;
+
+      try {
+        console.log = (...args) => {
+          logs.push(
+            args
+              .map((arg) => (typeof arg === "object" ? JSON.stringify(arg) : arg))
+              .join(" ")
+          );
+        };
+        console.error = (...args) => {
+          logs.push("[ERROR] " + args.join(" "));
+        };
+        console.warn = (...args) => {
+          logs.push("[WARN] " + args.join(" "));
+        };
+
+        let inputLines = input ? input.split("\n") : [];
+        let inputIndex = 0;
+        window.prompt = () => {
+          if (inputIndex < inputLines.length) {
+            return inputLines[inputIndex++];
+          }
+          return null;
+        };
+
+        // eslint-disable-next-line no-eval
+        eval(code);
+
+        setOutput(logs.join("\n") || "No Output");
         setErrorData(null);
+      } catch (browserErr) {
+        const errorMsg = browserErr.stack || browserErr.toString();
+        setOutput(errorMsg);
+        setErrorData(explainError(errorMsg));
+      } finally {
+        console.log = originalLog;
+        console.error = originalError;
+        console.warn = originalWarn;
+        window.prompt = originalPrompt;
       }
-
-    } catch (error) {
-      setOutput("Error: " + error.message);
     }
   };
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <button onClick={() => navigate("/")}>⬅ Back</button>
-        <h2>Output (Judge0)</h2>
+        <button onClick={() => navigate("/")} style={styles.backButton}>⬅ Back</button>
+        <h2>Output Terminal</h2>
+        <span
+          style={{
+            ...styles.badge,
+            background: runMode.includes("Server") ? "#2ea44f" : "#d73a49",
+          }}
+        >
+          {runMode}
+        </span>
       </div>
 
       <pre style={styles.output}>{output}</pre>
@@ -91,6 +156,22 @@ const styles = {
     display: "flex",
     gap: "10px",
     alignItems: "center",
+  },
+  backButton: {
+    padding: "6px 12px",
+    background: "#333",
+    color: "#fff",
+    border: "1px solid #555",
+    cursor: "pointer",
+    borderRadius: "4px",
+  },
+  badge: {
+    marginLeft: "15px",
+    padding: "4px 8px",
+    borderRadius: "12px",
+    fontSize: "0.85em",
+    fontWeight: "bold",
+    color: "#fff",
   },
   output: {
     marginTop: "20px",
