@@ -1,7 +1,7 @@
 {
   "name": "codeeditor",
   "version": "0.1.0",
-  "homepage": "https://ammarchandorewala-debug.github.io/drnew",
+  
   "private": true,
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
